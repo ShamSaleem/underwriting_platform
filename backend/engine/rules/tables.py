@@ -37,10 +37,10 @@ def bmi_decision(bmi: float) -> Result:
     if bmi < 30:
         return DecisionCode.STD, 0, f"BMI {bmi} within standard range."
     if bmi < 35:
-        return DecisionCode.R25, 25, f"BMI {bmi} -> mild extra."
+        return DecisionCode.R25, 25, f"BMI {bmi} -> mild extra (Article 5)."
     if bmi < 40:
-        return DecisionCode.R75, 75, f"BMI {bmi} -> moderate rating."
-    return DecisionCode.DECL, 0, f"BMI {bmi} exceeds 40 -> decline/postpone."
+        return DecisionCode.R50, 50, f"BMI {bmi} -> moderate rating (Article 5)."
+    return DecisionCode.DECL, 0, f"BMI {bmi} exceeds 40 -> decline/postpone (Article 5)."
 
 
 def hba1c_decision(hba1c: float) -> Result:

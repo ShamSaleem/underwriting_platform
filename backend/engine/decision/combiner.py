@@ -9,23 +9,18 @@ from __future__ import annotations
 from ..config import settings
 from ..models import Decision, DecisionCode, Finding, UnderwriteRequest
 
-# Map a summed mortality loading to the nearest standard rating code.
-_RATING_BANDS: list[tuple[int, DecisionCode]] = [
-    (25, DecisionCode.R25),
-    (50, DecisionCode.R50),
-    (75, DecisionCode.R75),
-    (100, DecisionCode.R100),
-    (150, DecisionCode.R150),
-    (200, DecisionCode.R200),
-    (300, DecisionCode.R300),
-]
+# The only rating CODES the manual (Article 17) defines. A total that lands exactly
+# on one of these uses that code; anything else is reported as RATED + the exact %
+# (carried in total_rating_pct), so we never invent codes like R150.
+_NAMED_BANDS: dict[int, DecisionCode] = {
+    25: DecisionCode.R25,
+    50: DecisionCode.R50,
+    100: DecisionCode.R100,
+}
 
 
 def _rating_to_code(total: int) -> DecisionCode:
-    for ceiling, code in _RATING_BANDS:
-        if total <= ceiling:
-            return code
-    return DecisionCode.R300
+    return _NAMED_BANDS.get(total, DecisionCode.RATED)
 
 
 def combine(req: UnderwriteRequest, findings: list[Finding], evidence: list[str]) -> Decision:
@@ -36,6 +31,19 @@ def combine(req: UnderwriteRequest, findings: list[Finding], evidence: list[str]
         if req.group
         else "unknown"
     )
+
+    # ---- Advisor guardrail: the LLM advises, it never judges. ----------------
+    # An AI finding can flag/rate/recommend, but it cannot single-handedly bind or
+    # decline a case. Any LLM finding forces a human referral, and an LLM "decline"
+    # is downgraded to "refer with a recommendation to decline".
+    for f in findings:
+        if f.source == "llm":
+            f.requires_referral = True
+            if f.decision_code == DecisionCode.DECL:
+                f.decision_code = DecisionCode.REFER
+                f.referral_reason = "AI recommends decline — underwriter to confirm."
+            elif not f.referral_reason:
+                f.referral_reason = "AI-assessed finding — underwriter to confirm."
 
     decline = [f for f in findings if f.decision_code == DecisionCode.DECL]
     postpone = [f for f in findings if f.decision_code == DecisionCode.POST]

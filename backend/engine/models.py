@@ -42,17 +42,17 @@ class Sex(str, Enum):
 
 
 class DecisionCode(str, Enum):
-    """Article 17 decision codes, plus REFER for human/reinsurance routing."""
+    """Article 17 decision codes (only those the manual defines), plus operational
+    routing codes. RATED is used for any substandard accept whose total loading is
+    not exactly one of the named bands — the exact percentage is carried separately
+    in `rating_pct`, so we never invent codes like R150."""
 
     PREF = "PREF"      # Preferred
     STD = "STD"        # Standard
-    R25 = "R25"        # +25% mortality rating
-    R50 = "R50"        # +50%
-    R75 = "R75"        # +75%
-    R100 = "R100"      # +100%
-    R150 = "R150"      # +150%
-    R200 = "R200"      # +200%
-    R300 = "R300"      # +300%
+    R25 = "R25"        # +25% mortality rating (manual Article 17)
+    R50 = "R50"        # +50% (manual Article 17)
+    R100 = "R100"      # +100% (manual Article 17)
+    RATED = "RATED"    # Substandard accept at the exact rating_pct (not a named band)
     FE = "FE"          # Flat extra
     EXCL = "EXCL"      # Exclusion
     POST = "POST"      # Postpone

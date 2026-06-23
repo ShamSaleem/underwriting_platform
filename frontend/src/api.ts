@@ -2,8 +2,22 @@
 // by the same FastAPI container, so relative URLs work everywhere.
 
 export type DecisionCode =
-  | "PREF" | "STD" | "R25" | "R50" | "R75" | "R100" | "R150" | "R200" | "R300"
+  | "PREF" | "STD" | "R25" | "R50" | "R100" | "RATED"
   | "FE" | "EXCL" | "POST" | "DECL" | "REFER";
+
+export interface UploadRow {
+  row: number;
+  ok: boolean;
+  id?: string;
+  decision?: Decision;
+  error?: string;
+}
+export interface UploadResult {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: UploadRow[];
+}
 
 export interface Finding {
   factor: string;
@@ -78,4 +92,9 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }).then((r) => j<{ id: string; created_at: string; decision: Decision }>(r)),
+  uploadExcel: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch("/api/upload", { method: "POST", body: fd }).then((r) => j<UploadResult>(r));
+  },
 };

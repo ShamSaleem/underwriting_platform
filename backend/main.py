@@ -13,13 +13,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
+import excel_io
 import store
 from engine.config import settings
+from engine.manual import MANUAL_EFFECTIVE_DATE, MANUAL_VERSION
 from engine.models import Decision, UnderwriteRequest
 from engine.service import underwrite
 
@@ -58,9 +61,48 @@ def health() -> dict:
     return {
         "status": "ok",
         "model": settings.model,
+        "llm_provider": "gemini",
         "llm_enabled": settings.llm_enabled,
-        "mode": "hybrid (rules + LLM)" if settings.llm_enabled else "rules-only",
+        "mode": "hybrid (rules + Gemini AI)" if settings.llm_enabled else "rules-only",
+        "manual_version": MANUAL_VERSION,
+        "manual_effective_date": MANUAL_EFFECTIVE_DATE,
     }
+
+
+@app.get("/api/template")
+def excel_template() -> Response:
+    """Download a pre-filled .xlsx the user fills in and uploads."""
+    return Response(
+        content=excel_io.build_template(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="underwriting_template.xlsx"'},
+    )
+
+
+@app.post("/api/upload")
+async def upload_excel(file: UploadFile) -> dict:
+    """Assess every applicant row in an uploaded .xlsx (single or multi-person)."""
+    data = await file.read()
+    try:
+        requests = excel_io.parse_workbook(data)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not read spreadsheet: {exc}")
+
+    results = []
+    for i, raw in enumerate(requests, start=1):
+        try:
+            req = UnderwriteRequest(**raw)
+            decision = underwrite(req)
+            dec = decision.model_dump(mode="json")
+            saved = store.save_case(req.model_dump(mode="json"), dec)
+            results.append({"row": i, "id": saved["id"], "ok": True, "decision": dec})
+        except ValidationError as exc:
+            results.append({"row": i, "ok": False, "error": "; ".join(e["msg"] for e in exc.errors()[:3])})
+        except Exception as exc:  # noqa: BLE001
+            results.append({"row": i, "ok": False, "error": str(exc)})
+
+    ok = sum(1 for r in results if r["ok"])
+    return {"total": len(results), "succeeded": ok, "failed": len(results) - ok, "results": results}
 
 
 @app.get("/api/stats")

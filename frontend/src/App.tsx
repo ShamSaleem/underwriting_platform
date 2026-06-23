@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, CaseSummary, Decision, DecisionCode, Stats } from "./api";
+import { api, CaseSummary, Decision, DecisionCode, Stats, UploadResult } from "./api";
 
 /* ------------------------------------------------------------------ helpers */
 function pillClass(code: DecisionCode): string {
@@ -7,7 +7,13 @@ function pillClass(code: DecisionCode): string {
   if (code === "STD") return "std";
   if (code === "DECL") return "bad";
   if (code === "POST" || code === "REFER") return "refer";
-  return "rate";
+  return "rate"; // R25/R50/R100/RATED/FE/EXCL
+}
+
+// Badge label: show the exact loading for a generic RATED so it never reads as a phantom code.
+function decisionLabel(code: DecisionCode, ratingPct: number): string {
+  if (code === "RATED") return `RATED +${ratingPct}%`;
+  return code;
 }
 const money = (n: number) =>
   "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -19,7 +25,7 @@ function DecisionView({ d }: { d: Decision }) {
   return (
     <div>
       <div className="verdict">
-        <span className={"badge " + pillClass(d.overall_decision)}>{d.overall_decision}</span>
+        <span className={"badge " + pillClass(d.overall_decision)}>{decisionLabel(d.overall_decision, d.total_rating_pct)}</span>
         <div>
           <div style={{ fontWeight: 700, fontSize: 17 }}>{d.applicant}</div>
           <div className="muted" style={{ fontSize: 13 }}>
@@ -375,6 +381,96 @@ function CaseDetail({ id, back }: { id: string; back: () => void }) {
   );
 }
 
+/* ---------------------------------------------------------------- Batch / Excel */
+function Batch({ go, onDone }: { go: (id: string) => void; onDone: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<UploadResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function upload() {
+    if (!file) return;
+    setBusy(true); setErr(null); setRes(null);
+    try {
+      const r = await api.uploadExcel(file);
+      setRes(r);
+      onDone();
+    } catch (e: any) {
+      setErr(String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="card">
+        <div className="section-title" style={{ marginTop: 0 }}>Bulk assessment from Excel</div>
+        <p className="muted" style={{ marginTop: 0, fontSize: 14 }}>
+          Upload an .xlsx with one applicant per row (single person or hundreds). Start from the
+          template — it has the columns and worked examples. List fields use <b>;</b> separators;
+          disclosures use <b>condition | details</b>.
+        </p>
+        <div className="toolbar">
+          <a className="btn" href="/api/template">⬇ Download template</a>
+          <label className="btn">
+            {file ? file.name : "Choose .xlsx file"}
+            <input
+              type="file"
+              accept=".xlsx"
+              style={{ display: "none" }}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+          <button className="btn primary" onClick={upload} disabled={!file || busy}>
+            {busy ? <span className="spinner" /> : "Upload & assess →"}
+          </button>
+          {err && <span style={{ color: "var(--red)", fontSize: 13 }}>{err}</span>}
+        </div>
+      </div>
+
+      {res && (
+        <>
+          <div className="chips" style={{ marginTop: 20 }}>
+            <span className="chip">Total <b>{res.total}</b></span>
+            <span className="chip" style={{ color: "var(--green)" }}>Assessed <b>{res.succeeded}</b></span>
+            {res.failed > 0 && <span className="chip" style={{ color: "var(--red)" }}>Errors <b>{res.failed}</b></span>}
+          </div>
+          <div className="card flush" style={{ marginTop: 8 }}>
+            <table>
+              <thead>
+                <tr><th>Row</th><th>Applicant</th><th>Decision</th><th>Result</th></tr>
+              </thead>
+              <tbody>
+                {res.results.map((r) => (
+                  <tr key={r.row} onClick={() => r.id && go(r.id)} style={{ cursor: r.id ? "pointer" : "default" }}>
+                    <td className="mono muted">{r.row}</td>
+                    <td>{r.decision?.applicant ?? "—"}</td>
+                    <td>
+                      {r.ok && r.decision ? (
+                        <span className={"pill " + pillClass(r.decision.overall_decision)}>
+                          {decisionLabel(r.decision.overall_decision, r.decision.total_rating_pct)}
+                        </span>
+                      ) : (
+                        <span className="pill bad">ERROR</span>
+                      )}
+                    </td>
+                    <td className="muted" style={{ fontSize: 13 }}>
+                      {r.ok
+                        ? (r.decision?.requires_referral ? "⚑ referral required" : "auto-decided")
+                        : r.error}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------- Login */
 function Login({ onLogin }: { onLogin: (user: string) => void }) {
   const [u, setU] = useState("");
@@ -425,14 +521,14 @@ function Login({ onLogin }: { onLogin: (user: string) => void }) {
 }
 
 /* ---------------------------------------------------------------- App */
-type View = { name: "dashboard" | "assess" | "cases" } | { name: "case"; id: string };
+type View = { name: "dashboard" | "assess" | "batch" | "cases" } | { name: "case"; id: string };
 
 export default function App() {
   const [user, setUser] = useState<string | null>(() => localStorage.getItem("aegis_user"));
   const [view, setView] = useState<View>({ name: "dashboard" });
   const [tick, setTick] = useState(0); // refresh dashboard after a save
 
-  const nav = (n: "dashboard" | "assess" | "cases") => setView({ name: n });
+  const nav = (n: "dashboard" | "assess" | "batch" | "cases") => setView({ name: n });
   const openCase = (id: string) => setView({ name: "case", id });
   const logout = () => { localStorage.removeItem("aegis_user"); setUser(null); };
 
@@ -447,6 +543,7 @@ export default function App() {
   const titles: Record<string, [string, string]> = {
     dashboard: ["Portfolio Overview", ""],
     assess: ["New Assessment", ""],
+    batch: ["Bulk Assessment", "Upload an Excel of applicants — single or many"],
     cases: ["Case History", "All assessed applications"],
     case: ["Case Detail", "Full decision and cited findings"],
   };
@@ -465,6 +562,7 @@ export default function App() {
         </div>
         <NavItem ic="▦" label="Dashboard" active={view.name === "dashboard"} onClick={() => nav("dashboard")} />
         <NavItem ic="✚" label="New Assessment" active={view.name === "assess"} onClick={() => nav("assess")} />
+        <NavItem ic="⤒" label="Bulk Assessment" active={view.name === "batch"} onClick={() => nav("batch")} />
         <NavItem ic="≣" label="Case History" active={view.name === "cases" || view.name === "case"} onClick={() => nav("cases")} />
         <div className="spacer" />
       </aside>
@@ -483,6 +581,7 @@ export default function App() {
         <div className="content">
           {view.name === "dashboard" && <Dashboard key={tick} go={openCase} />}
           {view.name === "assess" && <Assess onSaved={() => setTick((t) => t + 1)} />}
+          {view.name === "batch" && <Batch go={openCase} onDone={() => setTick((t) => t + 1)} />}
           {view.name === "cases" && <Cases key={tick} go={openCase} />}
           {view.name === "case" && <CaseDetail id={view.id} back={() => nav("cases")} />}
         </div>
