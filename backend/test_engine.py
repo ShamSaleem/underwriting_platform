@@ -151,6 +151,60 @@ def test_impairment_unknown_condition_refers():
     assert d.overall_decision == DecisionCode.REFER
 
 
+# ---- Qualitative rules: avocations (Art 12) -------------------------------- #
+def test_avocation_scuba_flat_extra():
+    d = underwrite(_req(_individual(avocations=["recreational scuba diving to 30m"])))
+    assert d.flat_extra_per_mille > 0
+    assert any(f.article == "Article 12" for f in d.findings)
+    assert d.requires_referral is True
+
+
+def test_benign_avocation_no_finding():
+    d = underwrite(_req(_individual(avocations=["weekend chess club"])))
+    assert not any(f.article == "Article 12" for f in d.findings)
+
+
+# ---- Qualitative rules: foreign travel (Art 13) ---------------------------- #
+def test_high_risk_travel_refers():
+    d = underwrite(_req(_individual(foreign_travel=["six months in Syria"])))
+    assert d.overall_decision == DecisionCode.REFER
+    assert any(f.article == "Article 13" for f in d.findings)
+
+
+def test_ordinary_travel_no_finding():
+    d = underwrite(_req(_individual(foreign_travel=["annual holiday in France"])))
+    assert not any(f.article == "Article 13" for f in d.findings)
+
+
+def test_travel_substring_not_false_positive():
+    # "Nigeria" must not trip the "Niger" high-risk entry.
+    d = underwrite(_req(_individual(foreign_travel=["quarterly trips to Nigeria"])))
+    assert not any(f.article == "Article 13" for f in d.findings)
+
+
+# ---- Qualitative rules: family history (Art 15) ---------------------------- #
+def test_family_history_early_onset_rates():
+    d = underwrite(_req(_individual(family_history=["father had a heart attack at 55"])))
+    assert d.total_rating_pct >= 25
+    assert any(f.article == "Article 15" for f in d.findings)
+
+
+def test_family_history_late_onset_no_rating():
+    d = underwrite(_req(_individual(family_history=["grandmother had cancer at 82"])))
+    assert not any(f.article == "Article 15" for f in d.findings)
+
+
+# ---- Disclosures have a single source (deterministic when LLM off) --------- #
+def test_disclosure_single_source_when_llm_off():
+    from engine.config import settings
+    assert settings.llm_enabled is False  # tests run with UW_LLM_ENABLED=false
+    d = underwrite(_req(_individual(medical_disclosures=[
+        MedicalDisclosure(condition="Asthma", details="mild, controlled")])))
+    disc = [f for f in d.findings if f.factor.startswith("Disclosed:")]
+    assert len(disc) == 1
+    assert disc[0].source == "rules"
+
+
 # ---- Fix #5: block must match applicant_type ------------------------------- #
 def test_missing_block_rejected():
     raised = False

@@ -1,16 +1,20 @@
 """LLM assessor — Google Gemini.
 
-Reads the manual + the applicant's free-text fields and returns structured, manual-
-cited findings for what the deterministic rules can't decide: free-text conditions
-(cancer, mental health, respiratory, neurological...), avocations, foreign travel,
-family history, and inferring an occupation class from a job title.
+Scope: disclosed MEDICAL CONDITIONS only (Articles 6-10 — cardiovascular, diabetes,
+cancer, respiratory, mental health, and similar impairments). This is the one place
+free-text nuance (staging, control, complications, recency) genuinely changes the
+decision, so it is the LLM's sole job. Everything else — build, vitals, substances,
+occupation, avocations, foreign travel, family history, financials — is handled by
+the deterministic rules engine.
 
 Design rules:
-- Only called when there is actually free text to assess (saves quota/latency).
+- Only called when there are disclosed conditions to assess (saves quota/latency).
 - Structured JSON output (Gemini responseSchema) — no brittle parsing.
 - Advisory only: every finding here is marked source="llm"; the combiner forces a
   human referral and never lets an LLM finding auto-bind or auto-decline.
 - Any error/timeout degrades to a single referral finding — never crashes a decision.
+- When disabled, `service.py` falls back to the deterministic impairment table, so a
+  disclosed condition is always assessed exactly once (never by both paths).
 """
 from __future__ import annotations
 
@@ -55,67 +59,46 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
 
 INSTRUCTIONS = """\
 You are a Life & Health underwriting assistant. Apply ONLY the underwriting manual \
-below. For each material risk factor in the applicant's FREE-TEXT data, output one \
-finding: a decision code, any mortality rating % (rating_pct) or flat extra, and the \
-exact manual Article you relied on (e.g. "Article 8").
+below. Assess ONLY the applicant's disclosed MEDICAL CONDITIONS (Articles 6-10: \
+cardiovascular, diabetes, cancer, respiratory, mental health, and similar \
+impairments). For each material condition output one finding: a decision code, any \
+mortality rating % (rating_pct) or flat extra, and the exact manual Article you \
+relied on (e.g. "Article 8").
 
 Rules:
-- Assess only free-text items: disclosed medical conditions (cancer, mental health, \
-respiratory, neurological, etc.), avocations, foreign travel/residency, family \
-history, and inferring an occupation class from a job title if no class was given.
-- Do NOT re-assess BMI, HbA1c, blood pressure, smoking status, the income multiple, \
-or a supplied occupation class — those are handled separately. Skip them.
+- Assess only the disclosed medical conditions listed below. Do NOT assess BMI, \
+HbA1c, fasting glucose, blood pressure, smoking, alcohol, occupation, avocations, \
+foreign travel, family history, or financials — those are handled separately. Skip them.
 - Be conservative. If evidence is insufficient to rate, use POST or REFER and explain.
 - Cite the most specific applicable Article. Never invent article numbers.
 - Use rating_pct for loadings (e.g. 50 for +50%); 0 if not a rating.
-- If nothing in your scope is material, return an empty findings list.
+- If no disclosed condition is material, return an empty findings list.
 
 UNDERWRITING MANUAL:
 """ + MANUAL_TEXT
 
 
-def _has_free_text(req: UnderwriteRequest) -> bool:
+def _has_disclosures(req: UnderwriteRequest) -> bool:
     ind = req.individual
-    if ind:
-        if ind.medical_disclosures or ind.avocations or ind.foreign_travel or ind.family_history:
-            return True
-        if ind.occupation and ind.occupation_class is None:
-            return True
-    if req.group and req.group.notes:
-        return True
-    return False
+    return bool(ind and ind.medical_disclosures)
 
 
 def _applicant_brief(req: UnderwriteRequest) -> str:
+    ind = req.individual
+    assert ind is not None  # guarded by _has_disclosures
     lines = [
-        f"Applicant type: {req.applicant_type.value}",
-        f"Product: {req.product.value}",
-        f"Sum assured: {req.sum_assured:,.0f}",
+        f"Applicant: age {ind.age}, sex {ind.sex.value}",
+        f"Product: {req.product.value}, sum assured {req.sum_assured:,.0f}",
+        "Disclosed medical conditions:",
     ]
-    if req.individual:
-        ind = req.individual
-        lines += [
-            f"Age: {ind.age}, Sex: {ind.sex.value}",
-            f"Occupation: {ind.occupation or 'n/a'} "
-            f"(class {ind.occupation_class if ind.occupation_class is not None else 'NOT SUPPLIED — infer'})",
-            f"Avocations: {', '.join(ind.avocations) or 'none'}",
-            f"Foreign travel/residency: {', '.join(ind.foreign_travel) or 'none'}",
-            f"Family history: {', '.join(ind.family_history) or 'none'}",
-        ]
-        if ind.medical_disclosures:
-            lines.append("Medical disclosures:")
-            for m in ind.medical_disclosures:
-                extra = []
-                if m.age_at_diagnosis is not None:
-                    extra.append(f"dx age {m.age_at_diagnosis}")
-                if m.treated is not None:
-                    extra.append("treated" if m.treated else "untreated")
-                suffix = f" ({'; '.join(extra)})" if extra else ""
-                lines.append(f"  - {m.condition}: {m.details or 'no detail'}{suffix}")
-        else:
-            lines.append("Medical disclosures: none")
-    if req.group:
-        lines.append(f"Group notes: {req.group.notes or 'none'}")
+    for m in ind.medical_disclosures:
+        extra = []
+        if m.age_at_diagnosis is not None:
+            extra.append(f"dx age {m.age_at_diagnosis}")
+        if m.treated is not None:
+            extra.append("treated" if m.treated else "untreated")
+        suffix = f" ({'; '.join(extra)})" if extra else ""
+        lines.append(f"  - {m.condition}: {m.details or 'no detail'}{suffix}")
     return "\n".join(lines)
 
 
@@ -138,15 +121,15 @@ def assess(req: UnderwriteRequest) -> list[Finding]:
     LLM is disabled; a referral finding on error (never raises)."""
     if not settings.llm_enabled:
         return []
-    if not _has_free_text(req):
-        return []  # nothing free-text to reason about — don't spend a call
+    if not _has_disclosures(req):
+        return []  # no disclosed conditions to reason about — don't spend a call
 
     import httpx
 
     body = {
         "system_instruction": {"parts": [{"text": INSTRUCTIONS}]},
         "contents": [
-            {"role": "user", "parts": [{"text": "Assess this applicant:\n\n" + _applicant_brief(req)}]}
+            {"role": "user", "parts": [{"text": "Assess these disclosed conditions:\n\n" + _applicant_brief(req)}]}
         ],
         "generationConfig": {
             "responseMimeType": "application/json",

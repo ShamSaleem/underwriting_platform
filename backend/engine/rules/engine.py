@@ -11,7 +11,7 @@ from ..models import (
     Product,
     UnderwriteRequest,
 )
-from . import impairments, tables
+from . import qualitative, tables
 
 
 def _finding(factor: str, article: str, res: tuple[DecisionCode, int, str], **extra) -> Finding:
@@ -97,8 +97,10 @@ def _run_individual(req: UnderwriteRequest) -> list[Finding]:
     if ind.occupation_class is not None:
         out.append(_occupation_finding(ind.occupation_class))
 
-    # Articles 6-10: deterministic assessment of disclosed conditions.
-    out.extend(impairments.assess_disclosures(req))
+    # Articles 12/13/15: lightweight deterministic assessment of avocations, foreign
+    # travel and family history. (Disclosed medical conditions are handled separately
+    # in service.py — LLM when enabled, deterministic impairment table otherwise.)
+    out.extend(qualitative.assess_qualitative(req))
 
     return out
 
