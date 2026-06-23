@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, CaseSummary, Decision, DecisionCode, Stats, UploadResult } from "./api";
+import { api, CaseSummary, ChecklistGroup, Decision, DecisionCode, Stats, UploadResult } from "./api";
 
 /* ------------------------------------------------------------------ helpers */
 function pillClass(code: DecisionCode): string {
@@ -164,36 +164,114 @@ function CaseTable({ cases, go }: { cases: CaseSummary[]; go: (id: string) => vo
   );
 }
 
-/* ---------------------------------------------------------------- Assess */
+/* ---------------------------------------------------------------- Wizard */
 const SAMPLES: Record<string, any> = {
   Clean: {
     applicant_type: "individual", product: "individual_life", sum_assured: 300000,
-    annual_income: 80000, existing_life_cover: 0,
-    full_name: "Aisha Bello", age: 34, sex: "female", smoking: "non_smoker",
+    annual_income: 80000, existing_life_cover: 0, assets: "", liabilities: "",
+    full_name: "Aisha Bello", age: 34, sex: "female", smoking: "non_smoker", alcohol: "none",
     occupation: "software engineer", occupation_class: 1,
-    height_cm: 165, weight_kg: 60, hba1c: "", systolic_bp: "", diastolic_bp: "",
-    avocations: "", foreign_travel: "", family_history: "", disclosures: "",
+    height_cm: 165, weight_kg: 60, hba1c: "", fasting_glucose: "", systolic_bp: "", diastolic_bp: "",
+    avocations: "", foreign_travel: "", family_history: "", disclosures_list: [],
   },
   Diabetic: {
     applicant_type: "individual", product: "individual_life", sum_assured: 750000,
-    annual_income: 90000, existing_life_cover: 200000,
-    full_name: "John Carter", age: 47, sex: "male", smoking: "occasional",
+    annual_income: 90000, existing_life_cover: 200000, assets: 300000, liabilities: 120000,
+    full_name: "John Carter", age: 47, sex: "male", smoking: "occasional", alcohol: "moderate",
     occupation: "warehouse supervisor", occupation_class: 4,
-    height_cm: 178, weight_kg: 104, hba1c: 7.4, systolic_bp: 148, diastolic_bp: 92,
+    height_cm: 178, weight_kg: 104, hba1c: 7.4, fasting_glucose: "", systolic_bp: 148, diastolic_bp: 92,
     avocations: "recreational scuba diving to 30m, ~10 dives/year",
     foreign_travel: "quarterly trips to Nigeria",
     family_history: "father had a heart attack at 55",
-    disclosures: "Type 2 diabetes | diagnosed 4 years ago, on metformin, no complications",
+    disclosures_list: [
+      { condition: "Diabetes", details: "Type 2, diagnosed 4 years ago, on metformin, no complications", age_at_diagnosis: 43, treated: true },
+    ],
   },
 };
 
-function Assess({ onSaved }: { onSaved: () => void }) {
+type Step = { id: string; title: string; sub: string };
+const STEPS_INDIVIDUAL: Step[] = [
+  { id: "applicant", title: "Applicant", sub: "Art. 1" },
+  { id: "documents", title: "Documents", sub: "Art. 3·4·16" },
+  { id: "financial", title: "Financial", sub: "Art. 3" },
+  { id: "build", title: "Build & vitals", sub: "Art. 5·6·7" },
+  { id: "lifestyle", title: "Lifestyle", sub: "Art. 11–14" },
+  { id: "history", title: "History", sub: "Art. 8·10·15" },
+  { id: "review", title: "Review", sub: "Art. 17·19" },
+];
+const STEPS_GROUP: Step[] = [
+  { id: "applicant", title: "Company", sub: "Art. 1" },
+  { id: "documents", title: "Documents", sub: "Art. 3·16" },
+  { id: "group", title: "Group risk", sub: "Art. 11·16" },
+  { id: "review", title: "Review", sub: "Art. 17" },
+];
+
+const DISCLOSURE_CATEGORIES = ["Cardiovascular", "Diabetes", "Cancer", "Respiratory", "Mental health", "Other"];
+
+// Article 11 occupational risk classes — name shown alongside the 1–6 class number.
+const OCCUPATION_CLASSES: [number, string][] = [
+  [1, "Office workers"],
+  [2, "Teachers"],
+  [3, "Sales professionals"],
+  [4, "Factory workers"],
+  [5, "Construction workers"],
+  [6, "Mining / offshore"],
+];
+
+function bmiOf(h: any, w: any): number | null {
+  const H = Number(h), W = Number(w);
+  if (!H || !W) return null;
+  const m = H / 100;
+  return Math.round((W / (m * m)) * 10) / 10;
+}
+
+function Wizard({ onSaved }: { onSaved: () => void }) {
   const [f, setF] = useState<any>(SAMPLES.Diabetic);
+  const [step, setStep] = useState(0);
+  const [checks, setChecks] = useState<Set<string>>(new Set());
+  const [reqGroups, setReqGroups] = useState<ChecklistGroup[]>([]);
+  const [reqBusy, setReqBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Decision | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
   const set = (k: string, v: any) => setF((p: any) => ({ ...p, [k]: v }));
   const isGroup = f.applicant_type === "group";
+  const steps = isGroup ? STEPS_GROUP : STEPS_INDIVIDUAL;
+  const current = steps[Math.min(step, steps.length - 1)];
+
+  function switchType(t: string) {
+    setF((p: any) => ({ ...p, applicant_type: t, product: t === "group" ? "group_life" : "individual_life" }));
+    setStep(0); setChecks(new Set()); setReqGroups([]); setResult(null); setErr(null);
+  }
+
+  // Pull the manual-driven documentation checklist when the documents step opens.
+  useEffect(() => {
+    if (current.id !== "documents") return;
+    setReqBusy(true);
+    api.requirements({ applicant_type: f.applicant_type, sum_assured: Number(f.sum_assured) || 0, annual_income: Number(f.annual_income) || 0 })
+      .then((r) => setReqGroups(r.groups))
+      .catch(() => setReqGroups([]))
+      .finally(() => setReqBusy(false));
+  }, [current.id, f.applicant_type, f.sum_assured, f.annual_income]);
+
+  const toggle = (k: string) =>
+    setChecks((prev) => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+
+  const requiredKeys = reqGroups.flatMap((g) => g.items.filter((i) => i.required).map((i) => i.key));
+  const docsComplete = requiredKeys.length > 0 && requiredKeys.every((k) => checks.has(k));
+
+  function canAdvance(): boolean {
+    switch (current.id) {
+      case "applicant":
+        if (Number(f.sum_assured) <= 0) return false;
+        return isGroup ? !!(f.company_name && Number(f.num_employees) > 0) : !!(f.full_name && Number(f.age) > 0);
+      case "documents":
+        return !reqBusy && docsComplete;
+      default:
+        return true;
+    }
+  }
 
   function buildBody() {
     const num = (v: any) => (v === "" || v == null ? undefined : Number(v));
@@ -201,7 +279,12 @@ function Assess({ onSaved }: { onSaved: () => void }) {
       applicant_type: f.applicant_type,
       product: f.product,
       sum_assured: Number(f.sum_assured),
-      financials: { annual_income: Number(f.annual_income || 0), existing_life_cover: Number(f.existing_life_cover || 0) },
+      financials: {
+        annual_income: Number(f.annual_income || 0),
+        existing_life_cover: Number(f.existing_life_cover || 0),
+        assets: num(f.assets),
+        liabilities: num(f.liabilities),
+      },
     };
     if (isGroup) {
       base.group = {
@@ -219,18 +302,24 @@ function Assess({ onSaved }: { onSaved: () => void }) {
         age: Number(f.age || 0),
         sex: f.sex || "other",
         smoking: f.smoking || "non_smoker",
+        alcohol: f.alcohol || "none",
         occupation: f.occupation || "",
         occupation_class: num(f.occupation_class),
         avocations: lines(String(f.avocations || "")),
         foreign_travel: lines(String(f.foreign_travel || "")),
         family_history: lines(String(f.family_history || "")),
-        medical_disclosures: lines(String(f.disclosures || "")).map((l) => {
-          const [c, d] = l.split("|");
-          return { condition: (c || "").trim(), details: (d || "").trim() || null };
-        }),
+        medical_disclosures: (f.disclosures_list || [])
+          .filter((d: any) => (d.condition || "").trim())
+          .map((d: any) => ({
+            condition: d.condition.trim(),
+            details: (d.details || "").trim() || null,
+            age_at_diagnosis: num(d.age_at_diagnosis),
+            treated: d.treated == null ? null : !!d.treated,
+          })),
         metrics: {
           height_cm: num(f.height_cm), weight_kg: num(f.weight_kg),
-          hba1c: num(f.hba1c), systolic_bp: num(f.systolic_bp), diastolic_bp: num(f.diastolic_bp),
+          hba1c: num(f.hba1c), fasting_glucose: num(f.fasting_glucose),
+          systolic_bp: num(f.systolic_bp), diastolic_bp: num(f.diastolic_bp),
         },
       };
     }
@@ -238,7 +327,7 @@ function Assess({ onSaved }: { onSaved: () => void }) {
   }
 
   async function submit() {
-    setBusy(true); setErr(null); setResult(null);
+    setBusy(true); setErr(null);
     try {
       const r = await api.underwrite(buildBody());
       setResult(r.decision);
@@ -250,100 +339,295 @@ function Assess({ onSaved }: { onSaved: () => void }) {
     }
   }
 
-  return (
-    <div className="row-2">
-      <div className="card">
-        <div className="toolbar" style={{ marginBottom: 18 }}>
-          <div className="seg">
-            <button className={!isGroup ? "on" : ""} onClick={() => set("applicant_type", "individual")}>Individual</button>
-            <button className={isGroup ? "on" : ""} onClick={() => set("applicant_type", "group")}>Group / Company</button>
-          </div>
-          <div className="spacer" style={{ flex: 1 }} />
-          {!isGroup && (
-            <>
-              <button className="btn ghost" onClick={() => setF(SAMPLES.Clean)}>Sample: clean</button>
-              <button className="btn ghost" onClick={() => setF(SAMPLES.Diabetic)}>Sample: complex</button>
-            </>
-          )}
-        </div>
+  function restart() {
+    setResult(null); setStep(0); setChecks(new Set()); setReqGroups([]); setErr(null);
+  }
 
-        <div className="form-grid">
-          <Field label="Product">
-            <select value={f.product} onChange={(e) => set("product", e.target.value)}>
-              {["individual_life","group_life","critical_illness","disability_income","medical","credit_life"].map((p) => (
-                <option key={p} value={p}>{p.replace(/_/g, " ")}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Sum assured (USD)">
-            <input type="number" value={f.sum_assured} onChange={(e) => set("sum_assured", e.target.value)} />
-          </Field>
-          <Field label="Annual income (USD)">
-            <input type="number" value={f.annual_income} onChange={(e) => set("annual_income", e.target.value)} />
-          </Field>
-          <Field label="Existing life cover (USD)">
-            <input type="number" value={f.existing_life_cover} onChange={(e) => set("existing_life_cover", e.target.value)} />
-          </Field>
+  // ----- disclosure list helpers -----
+  const addDisc = (cat: string) =>
+    set("disclosures_list", [...(f.disclosures_list || []), { condition: cat === "Other" ? "" : cat, details: "", age_at_diagnosis: "", treated: null }]);
+  const updDisc = (i: number, k: string, v: any) =>
+    setF((p: any) => { const l = [...(p.disclosures_list || [])]; l[i] = { ...l[i], [k]: v }; return { ...p, disclosures_list: l }; });
+  const rmDisc = (i: number) =>
+    setF((p: any) => { const l = [...(p.disclosures_list || [])]; l.splice(i, 1); return { ...p, disclosures_list: l }; });
 
-          {!isGroup ? (
-            <>
-              <Field label="Full name"><input value={f.full_name} onChange={(e) => set("full_name", e.target.value)} /></Field>
-              <Field label="Age"><input type="number" value={f.age} onChange={(e) => set("age", e.target.value)} /></Field>
-              <Field label="Sex">
-                <select value={f.sex} onChange={(e) => set("sex", e.target.value)}>
-                  <option value="male">male</option><option value="female">female</option><option value="other">other</option>
-                </select>
-              </Field>
-              <Field label="Smoking">
-                <select value={f.smoking} onChange={(e) => set("smoking", e.target.value)}>
-                  <option value="non_smoker">non-smoker</option><option value="occasional">occasional</option><option value="regular">regular</option>
-                </select>
-              </Field>
-              <Field label="Occupation"><input value={f.occupation} onChange={(e) => set("occupation", e.target.value)} /></Field>
-              <Field label="Occupation class (1–6)"><input type="number" value={f.occupation_class} onChange={(e) => set("occupation_class", e.target.value)} /></Field>
-              <Field label="Height (cm)"><input type="number" value={f.height_cm} onChange={(e) => set("height_cm", e.target.value)} /></Field>
-              <Field label="Weight (kg)"><input type="number" value={f.weight_kg} onChange={(e) => set("weight_kg", e.target.value)} /></Field>
-              <Field label="HbA1c (%)"><input type="number" value={f.hba1c} onChange={(e) => set("hba1c", e.target.value)} /></Field>
-              <Field label="Blood pressure (sys / dia)">
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input type="number" placeholder="sys" value={f.systolic_bp} onChange={(e) => set("systolic_bp", e.target.value)} />
-                  <input type="number" placeholder="dia" value={f.diastolic_bp} onChange={(e) => set("diastolic_bp", e.target.value)} />
-                </div>
-              </Field>
-              <Field label="Avocations (one per line)" full><textarea value={f.avocations} onChange={(e) => set("avocations", e.target.value)} /></Field>
-              <Field label="Foreign travel / residency (one per line)" full><textarea value={f.foreign_travel} onChange={(e) => set("foreign_travel", e.target.value)} /></Field>
-              <Field label="Family history (one per line)" full><textarea value={f.family_history} onChange={(e) => set("family_history", e.target.value)} /></Field>
-              <Field label="Medical disclosures — one per line as: condition | details" full>
-                <textarea value={f.disclosures} onChange={(e) => set("disclosures", e.target.value)} />
-              </Field>
-            </>
-          ) : (
-            <>
-              <Field label="Company name"><input value={f.company_name || ""} onChange={(e) => set("company_name", e.target.value)} /></Field>
-              <Field label="Industry"><input value={f.industry || ""} onChange={(e) => set("industry", e.target.value)} /></Field>
-              <Field label="Number of employees"><input type="number" value={f.num_employees || ""} onChange={(e) => set("num_employees", e.target.value)} /></Field>
-              <Field label="Average age"><input type="number" value={f.average_age || ""} onChange={(e) => set("average_age", e.target.value)} /></Field>
-              <Field label="Occupation classes (comma separated)"><input value={f.occupation_classes || ""} onChange={(e) => set("occupation_classes", e.target.value)} /></Field>
-              <Field label="Free cover limit requested (USD)"><input type="number" value={f.free_cover_limit_requested || ""} onChange={(e) => set("free_cover_limit_requested", e.target.value)} /></Field>
-              <Field label="Notes" full><textarea value={f.notes || ""} onChange={(e) => set("notes", e.target.value)} /></Field>
-            </>
-          )}
-        </div>
-
-        <div className="toolbar" style={{ marginTop: 20 }}>
-          <button className="btn primary" onClick={submit} disabled={busy}>
-            {busy ? <span className="spinner" /> : "Assess eligibility →"}
-          </button>
-          {err && <span style={{ color: "var(--red)", fontSize: 13 }}>{err}</span>}
+  /* ---- decision screen (after submit) ---- */
+  if (result) {
+    return (
+      <div className="card wizard">
+        <div className="docs-banner ok" style={{ marginBottom: 20 }}>✓ Assessment complete and saved to the case history.</div>
+        <DecisionView d={result} />
+        <div className="wizard-foot">
+          <span className="muted" style={{ fontSize: 13 }}>{f.full_name || f.company_name}</span>
+          <button className="btn primary" onClick={restart}>Start new assessment →</button>
         </div>
       </div>
+    );
+  }
 
-      <div className="card">
-        <div className="section-title" style={{ marginTop: 0 }}>Decision</div>
-        {result ? <DecisionView d={result} /> : (
-          <div className="empty">Fill the form and run an assessment.<br />The decision and cited findings appear here.</div>
+  return (
+    <div className="card wizard">
+      {/* applicant-type toggle + samples live above the stepper */}
+      <div className="toolbar" style={{ marginBottom: 20 }}>
+        <div className="seg">
+          <button className={!isGroup ? "on" : ""} onClick={() => switchType("individual")}>Individual</button>
+          <button className={isGroup ? "on" : ""} onClick={() => switchType("group")}>Group / Company</button>
+        </div>
+        <div className="spacer" style={{ flex: 1 }} />
+        {!isGroup && current.id === "applicant" && (
+          <>
+            <button className="btn ghost" onClick={() => { setF(SAMPLES.Clean); setChecks(new Set()); }}>Sample: clean</button>
+            <button className="btn ghost" onClick={() => { setF(SAMPLES.Diabetic); setChecks(new Set()); }}>Sample: complex</button>
+          </>
         )}
       </div>
+
+      <Stepper steps={steps} step={step} onJump={(i) => i < step && setStep(i)} />
+
+      <div className="step-head">
+        <h3>{current.title}</h3>
+        <div className="muted">{stepBlurb(current.id)}</div>
+      </div>
+
+      <div className="wizard-body">{renderStep()}</div>
+
+      <div className="wizard-foot">
+        <button className="btn ghost" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0}>← Back</button>
+        <div className="toolbar">
+          {err && <span style={{ color: "var(--red)", fontSize: 13 }}>{err}</span>}
+          {current.id === "review" ? (
+            <button className="btn primary" onClick={submit} disabled={busy}>
+              {busy ? <span className="spinner" /> : "Assess eligibility →"}
+            </button>
+          ) : (
+            <button className="btn primary" onClick={() => setStep((s) => s + 1)} disabled={!canAdvance()}>Next →</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  /* ---------------- per-step rendering ---------------- */
+  function renderStep() {
+    switch (current.id) {
+      case "applicant":
+        return isGroup ? (
+          <div className="form-grid">
+            <Field label="Product">
+              <select value={f.product} onChange={(e) => set("product", e.target.value)}>
+                {["group_life", "medical", "credit_life"].map((p) => <option key={p} value={p}>{p.replace(/_/g, " ")}</option>)}
+              </select>
+            </Field>
+            <Field label="Sum assured / scheme benefit (USD)"><input type="number" value={f.sum_assured} onChange={(e) => set("sum_assured", e.target.value)} /></Field>
+            <Field label="Company name"><input value={f.company_name || ""} onChange={(e) => set("company_name", e.target.value)} /></Field>
+            <Field label="Industry"><input value={f.industry || ""} onChange={(e) => set("industry", e.target.value)} /></Field>
+            <Field label="Number of employees"><input type="number" value={f.num_employees || ""} onChange={(e) => set("num_employees", e.target.value)} /></Field>
+          </div>
+        ) : (
+          <div className="form-grid">
+            <Field label="Product">
+              <select value={f.product} onChange={(e) => set("product", e.target.value)}>
+                {["individual_life", "critical_illness", "disability_income", "medical", "credit_life"].map((p) => <option key={p} value={p}>{p.replace(/_/g, " ")}</option>)}
+              </select>
+            </Field>
+            <Field label="Sum assured (USD)"><input type="number" value={f.sum_assured} onChange={(e) => set("sum_assured", e.target.value)} /></Field>
+            <Field label="Full name"><input value={f.full_name} onChange={(e) => set("full_name", e.target.value)} /></Field>
+            <Field label="Age"><input type="number" value={f.age} onChange={(e) => set("age", e.target.value)} /></Field>
+            <Field label="Sex">
+              <select value={f.sex} onChange={(e) => set("sex", e.target.value)}>
+                <option value="male">male</option><option value="female">female</option><option value="other">other</option>
+              </select>
+            </Field>
+          </div>
+        );
+
+      case "documents":
+        return (
+          <div>
+            <div className={"docs-banner" + (docsComplete ? " ok" : "")}>
+              {reqBusy ? "Loading documentation requirements…"
+                : docsComplete ? "✓ All mandatory documents accounted for — you may proceed."
+                : "Tick each mandatory document once it is on file. The case cannot advance until all required items are checked."}
+            </div>
+            {reqGroups.map((g) => (
+              <div key={g.title} className="check-group">
+                <div className="cg-head">
+                  <h4>{g.title}</h4>
+                  <span className="cg-art">{g.article}</span>
+                  {g.note && <span className="cg-note">{g.note}</span>}
+                </div>
+                {g.items.map((it) => (
+                  <div key={it.key} className={"check-item" + (checks.has(it.key) ? " on" : "")} onClick={() => toggle(it.key)}>
+                    <span className="box">{checks.has(it.key) ? "✓" : ""}</span>
+                    <span className="lbl">{it.label}</span>
+                    <span className={it.required ? "req" : "opt"}>{it.required ? "Required" : "Optional"}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        );
+
+      case "financial": {
+        const nw = (Number(f.assets) || 0) - (Number(f.liabilities) || 0);
+        const hasNw = (f.assets !== "" && f.assets != null) || (f.liabilities !== "" && f.liabilities != null);
+        return (
+          <div className="form-grid">
+            <Field label="Annual income (USD)"><input type="number" value={f.annual_income} onChange={(e) => set("annual_income", e.target.value)} /></Field>
+            <Field label="Existing life cover in force (USD)"><input type="number" value={f.existing_life_cover} onChange={(e) => set("existing_life_cover", e.target.value)} /></Field>
+            <Field label="Total assets (USD) — Article 3.4"><input type="number" value={f.assets || ""} onChange={(e) => set("assets", e.target.value)} /></Field>
+            <Field label="Total liabilities (USD) — Article 3.4"><input type="number" value={f.liabilities || ""} onChange={(e) => set("liabilities", e.target.value)} /></Field>
+            <Field label="Net worth (auto)"><input value={hasNw ? money(nw) : "—"} readOnly /></Field>
+            <div className="field full">
+              <div className="docs-banner">Article 3 caps cover at 15×–25× income by band; net worth (assets − liabilities) can justify additional cover. Cover above the combined limit is referred for financial justification.</div>
+            </div>
+          </div>
+        );
+      }
+
+      case "build":
+        return (
+          <div className="form-grid">
+            <Field label="Height (cm)"><input type="number" value={f.height_cm} onChange={(e) => set("height_cm", e.target.value)} /></Field>
+            <Field label="Weight (kg)"><input type="number" value={f.weight_kg} onChange={(e) => set("weight_kg", e.target.value)} /></Field>
+            <Field label="BMI (auto)"><input value={bmiOf(f.height_cm, f.weight_kg) ?? "—"} readOnly /></Field>
+            <Field label="HbA1c (%) — Article 7"><input type="number" value={f.hba1c} onChange={(e) => set("hba1c", e.target.value)} /></Field>
+            <Field label="Fasting glucose (mg/dL) — Article 7"><input type="number" placeholder="used if no HbA1c" value={f.fasting_glucose} onChange={(e) => set("fasting_glucose", e.target.value)} /></Field>
+            <Field label="Blood pressure (sys / dia) — Article 6">
+              <div style={{ display: "flex", gap: 8 }}>
+                <input type="number" placeholder="sys" value={f.systolic_bp} onChange={(e) => set("systolic_bp", e.target.value)} />
+                <input type="number" placeholder="dia" value={f.diastolic_bp} onChange={(e) => set("diastolic_bp", e.target.value)} />
+              </div>
+            </Field>
+          </div>
+        );
+
+      case "lifestyle":
+        return (
+          <div className="form-grid">
+            <Field label="Smoking — Article 14">
+              <select value={f.smoking} onChange={(e) => set("smoking", e.target.value)}>
+                <option value="non_smoker">non-smoker</option><option value="occasional">occasional</option><option value="regular">regular</option>
+              </select>
+            </Field>
+            <Field label="Alcohol — Article 14">
+              <select value={f.alcohol} onChange={(e) => set("alcohol", e.target.value)}>
+                <option value="none">none / minimal</option><option value="moderate">moderate</option><option value="heavy">heavy</option>
+              </select>
+            </Field>
+            <Field label="Occupation"><input value={f.occupation} onChange={(e) => set("occupation", e.target.value)} /></Field>
+            <Field label="Occupation class — Article 11">
+              <select value={f.occupation_class ?? ""} onChange={(e) => set("occupation_class", e.target.value === "" ? "" : Number(e.target.value))}>
+                <option value="">— select class —</option>
+                {OCCUPATION_CLASSES.map(([n, label]) => <option key={n} value={n}>{n} — {label}</option>)}
+              </select>
+            </Field>
+            <Field label="Avocations, one per line — Article 12" full><textarea value={f.avocations} onChange={(e) => set("avocations", e.target.value)} /></Field>
+            <Field label="Foreign travel / residency, one per line — Article 13" full><textarea value={f.foreign_travel} onChange={(e) => set("foreign_travel", e.target.value)} /></Field>
+          </div>
+        );
+
+      case "history":
+        return (
+          <div>
+            <Field label="Family history, one per line — Article 15" full><textarea value={f.family_history} onChange={(e) => set("family_history", e.target.value)} /></Field>
+            <div className="section-title" style={{ marginTop: 24 }}>Medical disclosures — Articles 6–10</div>
+            {(f.disclosures_list || []).length === 0 && <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>No conditions disclosed. Add any that apply.</div>}
+            {(f.disclosures_list || []).map((d: any, i: number) => (
+              <div key={i} className="disc-row">
+                <div className="disc-grid">
+                  <Field label="Condition"><input value={d.condition} onChange={(e) => updDisc(i, "condition", e.target.value)} /></Field>
+                  <Field label="Age at dx"><input type="number" value={d.age_at_diagnosis} onChange={(e) => updDisc(i, "age_at_diagnosis", e.target.value)} /></Field>
+                  <Field label="Treated">
+                    <select value={d.treated == null ? "" : d.treated ? "yes" : "no"} onChange={(e) => updDisc(i, "treated", e.target.value === "" ? null : e.target.value === "yes")}>
+                      <option value="">—</option><option value="yes">yes</option><option value="no">no</option>
+                    </select>
+                  </Field>
+                  <button className="btn ghost" onClick={() => rmDisc(i)} title="Remove">✕</button>
+                </div>
+                <Field label="Details" full><textarea value={d.details} onChange={(e) => updDisc(i, "details", e.target.value)} /></Field>
+              </div>
+            ))}
+            <div className="toolbar" style={{ marginTop: 8 }}>
+              {DISCLOSURE_CATEGORIES.map((c) => <button key={c} className="btn ghost" onClick={() => addDisc(c)}>+ {c}</button>)}
+            </div>
+          </div>
+        );
+
+      case "group":
+        return (
+          <div className="form-grid">
+            <Field label="Average age"><input type="number" value={f.average_age || ""} onChange={(e) => set("average_age", e.target.value)} /></Field>
+            <Field label="Occupation classes (comma separated) — Article 11"><input value={f.occupation_classes || ""} onChange={(e) => set("occupation_classes", e.target.value)} /></Field>
+            <Field label="Free cover limit requested (USD) — Article 16"><input type="number" value={f.free_cover_limit_requested || ""} onChange={(e) => set("free_cover_limit_requested", e.target.value)} /></Field>
+            <Field label="Annual scheme premium / income (USD)"><input type="number" value={f.annual_income} onChange={(e) => set("annual_income", e.target.value)} /></Field>
+            <Field label="Notes" full><textarea value={f.notes || ""} onChange={(e) => set("notes", e.target.value)} /></Field>
+          </div>
+        );
+
+      case "review":
+        return <ReviewSummary f={f} isGroup={isGroup} docsCount={checks.size} />;
+
+      default:
+        return null;
+    }
+  }
+}
+
+function stepBlurb(id: string): string {
+  return {
+    applicant: "Who and what is being assessed.",
+    documents: "Evidence the manual mandates before this case can be underwritten.",
+    financial: "Income and in-force cover for the Article 3 multiple check.",
+    build: "Build and vitals — the numeric medical thresholds.",
+    lifestyle: "Smoking, occupation, avocations and travel.",
+    history: "Family history and disclosed conditions.",
+    group: "Scheme risk profile.",
+    review: "Confirm the inputs, then run the engine.",
+  }[id] || "";
+}
+
+function Stepper({ steps, step, onJump }: { steps: Step[]; step: number; onJump: (i: number) => void }) {
+  return (
+    <div className="stepper">
+      {steps.map((s, i) => {
+        const state = i < step ? "done" : i === step ? "current" : "";
+        return (
+          <div key={s.id} className={"step " + state} onClick={() => onJump(i)} style={{ cursor: i < step ? "pointer" : "default" }}>
+            <span className="dot">{i < step ? "✓" : i + 1}</span>
+            <span className="step-label">{s.title}</span>
+            <span className="step-sub">{s.sub}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReviewSummary({ f, isGroup, docsCount }: { f: any; isGroup: boolean; docsCount: number }) {
+  const rows: [string, any][] = isGroup
+    ? [
+        ["Company", f.company_name], ["Industry", f.industry || "—"], ["Product", String(f.product).replace(/_/g, " ")],
+        ["Sum assured", money(f.sum_assured)], ["Employees", f.num_employees || "—"], ["Average age", f.average_age || "—"],
+        ["Occupation classes", f.occupation_classes || "—"], ["Free cover limit", f.free_cover_limit_requested ? money(f.free_cover_limit_requested) : "—"],
+        ["Documents on file", docsCount],
+      ]
+    : [
+        ["Applicant", f.full_name], ["Age / sex", `${f.age} · ${f.sex}`], ["Product", String(f.product).replace(/_/g, " ")],
+        ["Sum assured", money(f.sum_assured)], ["Annual income", money(f.annual_income)], ["Existing cover", money(f.existing_life_cover)],
+        ["Net worth", (f.assets !== "" && f.assets != null) || (f.liabilities !== "" && f.liabilities != null) ? money((Number(f.assets) || 0) - (Number(f.liabilities) || 0)) : "—"],
+        ["Smoking / alcohol", `${f.smoking} / ${f.alcohol}`], ["Occupation", `${f.occupation || "—"} (class ${f.occupation_class || "—"})`],
+        ["BMI", bmiOf(f.height_cm, f.weight_kg) ?? "—"], ["HbA1c / fasting", `${f.hba1c || "—"} / ${f.fasting_glucose || "—"}`], ["Blood pressure", `${f.systolic_bp || "—"}/${f.diastolic_bp || "—"}`],
+        ["Disclosures", (f.disclosures_list || []).length], ["Documents on file", docsCount],
+      ];
+  return (
+    <div className="review-grid">
+      {rows.map(([k, v]) => (
+        <div key={k} style={{ borderBottom: "1px solid var(--border)", padding: "8px 0" }}>
+          <div className="rk">{k}</div>
+          <div className="rv">{String(v)}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -580,7 +864,7 @@ export default function App() {
         </div>
         <div className="content">
           {view.name === "dashboard" && <Dashboard key={tick} go={openCase} />}
-          {view.name === "assess" && <Assess onSaved={() => setTick((t) => t + 1)} />}
+          {view.name === "assess" && <Wizard onSaved={() => setTick((t) => t + 1)} />}
           {view.name === "batch" && <Batch go={openCase} onDone={() => setTick((t) => t + 1)} />}
           {view.name === "cases" && <Cases key={tick} go={openCase} />}
           {view.name === "case" && <CaseDetail id={view.id} back={() => nav("cases")} />}

@@ -48,6 +48,21 @@ export interface Decision {
   llm_used: boolean;
 }
 
+export interface ChecklistItem {
+  key: string;
+  label: string;
+  required: boolean;
+}
+export interface ChecklistGroup {
+  title: string;
+  article: string;
+  note?: string;
+  items: ChecklistItem[];
+}
+export interface RequirementsResult {
+  groups: ChecklistGroup[];
+}
+
 export interface CaseSummary {
   id: string;
   created_at: string;
@@ -86,6 +101,12 @@ export const api = {
   stats: () => fetch("/api/stats").then((r) => j<Stats>(r)),
   cases: () => fetch("/api/cases").then((r) => j<CaseSummary[]>(r)),
   case: (id: string) => fetch(`/api/cases/${id}`).then((r) => j<any>(r)),
+  requirements: (body: { applicant_type: string; sum_assured: number; annual_income?: number }) =>
+    fetch("/api/requirements", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => j<RequirementsResult>(r)),
   underwrite: (body: unknown) =>
     fetch("/api/underwrite", {
       method: "POST",

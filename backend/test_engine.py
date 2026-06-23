@@ -16,6 +16,7 @@ from engine.models import (
     Smoking,
     UnderwriteRequest,
 )
+from engine.models import Financials, MedicalDisclosure
 from engine.rules import tables
 from engine.service import underwrite
 
@@ -91,6 +92,63 @@ def test_class6_occupation_surfaces_refer():
     d = underwrite(_req(_individual(occupation="Demolition", occupation_class=6)))
     assert d.overall_decision == DecisionCode.REFER
     assert d.requires_referral is True
+
+
+# ---- New field: alcohol (Article 14) --------------------------------------- #
+def test_alcohol_heavy_rates():
+    assert tables.alcohol_decision("none")[1] == 0
+    assert tables.alcohol_decision("moderate")[1] == 0
+    assert tables.alcohol_decision("heavy")[0] == DecisionCode.R50
+    d = underwrite(_req(_individual(alcohol="heavy")))
+    assert d.total_rating_pct >= 50
+
+
+# ---- New field: fasting glucose only when no HbA1c ------------------------- #
+def test_fasting_glucose_used_only_without_hba1c():
+    # No HbA1c -> fasting glucose drives the diabetes finding.
+    d = underwrite(_req(_individual(metrics=HealthMetrics(fasting_glucose=150))))
+    assert any("fasting glucose" in f.factor.lower() for f in d.findings)
+    assert d.total_rating_pct >= 25
+    # HbA1c present -> fasting glucose ignored (no double-rating from glucose).
+    d2 = underwrite(_req(_individual(metrics=HealthMetrics(hba1c=6.7, fasting_glucose=150))))
+    assert not any("fasting glucose" in f.factor.lower() for f in d2.findings)
+
+
+# ---- New: net-worth uplift to the income multiple (Article 3.4) ------------ #
+def test_net_worth_uplift_avoids_financial_referral():
+    base = dict(sum_assured=2_000_000)
+    # 50k income -> 15x = 750k limit; 2M cover would breach...
+    breached = underwrite(_req(_individual(), financials=Financials(annual_income=50_000), **base))
+    assert any(f.factor.startswith("Financial") for f in breached.findings)
+    # ...but 1.5M net worth lifts the allowance enough to clear it.
+    ok = underwrite(_req(_individual(), financials=Financials(annual_income=50_000, assets=1_500_000), **base))
+    assert not any(f.factor.startswith("Financial") for f in ok.findings)
+
+
+# ---- New: deterministic impairment table (Articles 6-10) ------------------- #
+def test_impairment_cancer_recent_postpones():
+    d = underwrite(_req(_individual(age=50, medical_disclosures=[
+        MedicalDisclosure(condition="Breast cancer", age_at_diagnosis=48, treated=True)])))
+    assert d.overall_decision == DecisionCode.POST
+
+
+def test_impairment_cancer_old_treated_rates():
+    d = underwrite(_req(_individual(age=50, medical_disclosures=[
+        MedicalDisclosure(condition="Breast cancer", age_at_diagnosis=40, treated=True)])))
+    assert d.total_rating_pct >= 50
+    assert d.requires_referral is True
+
+
+def test_impairment_metastatic_declines():
+    d = underwrite(_req(_individual(medical_disclosures=[
+        MedicalDisclosure(condition="Lung cancer", details="metastatic disease")])))
+    assert d.overall_decision == DecisionCode.DECL
+
+
+def test_impairment_unknown_condition_refers():
+    d = underwrite(_req(_individual(medical_disclosures=[
+        MedicalDisclosure(condition="Rare autoimmune disorder")])))
+    assert d.overall_decision == DecisionCode.REFER
 
 
 # ---- Fix #5: block must match applicant_type ------------------------------- #

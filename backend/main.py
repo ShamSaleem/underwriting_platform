@@ -24,6 +24,7 @@ import store
 from engine.config import settings
 from engine.manual import MANUAL_EFFECTIVE_DATE, MANUAL_VERSION
 from engine.models import Decision, UnderwriteRequest
+from engine.rules.requirements import document_requirements
 from engine.service import underwrite
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -103,6 +104,19 @@ async def upload_excel(file: UploadFile) -> dict:
 
     ok = sum(1 for r in results if r["ok"])
     return {"total": len(results), "succeeded": ok, "failed": len(results) - ok, "results": results}
+
+
+@app.post("/api/requirements")
+def requirements(body: dict) -> dict:
+    """Documentation checklist (Articles 3/4/16) the intake wizard must satisfy
+    before advancing. Driven by the same manual tables as the decision."""
+    return {
+        "groups": document_requirements(
+            str(body.get("applicant_type", "individual")),
+            float(body.get("sum_assured") or 0),
+            float(body.get("annual_income") or 0),
+        )
+    }
 
 
 @app.get("/api/stats")

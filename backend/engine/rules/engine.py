@@ -11,7 +11,7 @@ from ..models import (
     Product,
     UnderwriteRequest,
 )
-from . import tables
+from . import impairments, tables
 
 
 def _finding(factor: str, article: str, res: tuple[DecisionCode, int, str], **extra) -> Finding:
@@ -34,17 +34,21 @@ def run_rules(req: UnderwriteRequest) -> tuple[list[Finding], list[str]]:
     findings: list[Finding] = []
     evidence = tables.evidence_required(req.sum_assured)
 
-    # Article 3 - financial justification (uses applicant income if provided).
+    # Article 3 - financial justification (income multiple, with a net-worth uplift
+    # per Article 3.4: assets net of liabilities can justify additional cover).
     if req.financials and req.financials.annual_income > 0:
         limit = tables.income_multiple_limit(req.financials.annual_income)
+        net_worth = req.financials.effective_net_worth()
+        allowed = limit + max(0.0, net_worth)
         total_cover = req.sum_assured + req.financials.existing_life_cover
-        if total_cover > limit:
+        if total_cover > allowed:
+            nw_note = f" + net worth {net_worth:,.0f}" if net_worth > 0 else ""
             findings.append(
                 Finding(
                     factor="Financial (income multiple)",
                     assessment=(
                         f"Total cover {total_cover:,.0f} exceeds the permitted "
-                        f"{limit:,.0f} ({limit / req.financials.annual_income:.0f}x income). "
+                        f"{allowed:,.0f} ({limit / req.financials.annual_income:.0f}x income{nw_note}). "
                         "Financial justification required."
                     ),
                     decision_code=DecisionCode.REFER,
@@ -74,6 +78,9 @@ def _run_individual(req: UnderwriteRequest) -> list[Finding]:
 
     if ind.metrics.hba1c is not None:
         out.append(_finding("Diabetes (HbA1c)", "Article 7", tables.hba1c_decision(ind.metrics.hba1c)))
+    elif ind.metrics.fasting_glucose is not None:
+        # Fall back to fasting glucose only when HbA1c is absent (no double-rating).
+        out.append(_finding("Diabetes (fasting glucose)", "Article 7", tables.fasting_glucose_decision(ind.metrics.fasting_glucose)))
 
     if ind.metrics.systolic_bp and ind.metrics.diastolic_bp:
         out.append(
@@ -85,9 +92,13 @@ def _run_individual(req: UnderwriteRequest) -> list[Finding]:
         )
 
     out.append(_finding("Substance use (smoking)", "Article 14", tables.smoking_decision(ind.smoking.value)))
+    out.append(_finding("Substance use (alcohol)", "Article 14", tables.alcohol_decision(ind.alcohol.value)))
 
     if ind.occupation_class is not None:
         out.append(_occupation_finding(ind.occupation_class))
+
+    # Articles 6-10: deterministic assessment of disclosed conditions.
+    out.extend(impairments.assess_disclosures(req))
 
     return out
 

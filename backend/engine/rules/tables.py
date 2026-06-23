@@ -77,6 +77,27 @@ def blood_pressure_decision(systolic: int, diastolic: int) -> Result:
     return DecisionCode.STD, 0, f"BP {systolic}/{diastolic} controlled."
 
 
+def fasting_glucose_decision(mgdl: float) -> Result:
+    """Article 7 - fasting blood sugar (mg/dL). Only applied when no HbA1c is on file,
+    so the two diabetes measures never double-rate the same applicant."""
+    if mgdl < 100:
+        return DecisionCode.STD, 0, f"Fasting glucose {mgdl} mg/dL normal."
+    if mgdl < 126:
+        return DecisionCode.STD, 0, f"Fasting glucose {mgdl} mg/dL prediabetic -> standard; monitor."
+    if mgdl < 200:
+        return DecisionCode.R25, 25, f"Fasting glucose {mgdl} mg/dL diabetic range -> rating; obtain HbA1c."
+    return DecisionCode.R50, 50, f"Fasting glucose {mgdl} mg/dL markedly elevated -> rating; obtain HbA1c."
+
+
+def alcohol_decision(status: str) -> Result:
+    """Article 14 - alcohol use."""
+    if status == "none":
+        return DecisionCode.STD, 0, "No / minimal alcohol use."
+    if status == "moderate":
+        return DecisionCode.STD, 0, "Moderate alcohol use -> standard."
+    return DecisionCode.R50, 50, "Heavy alcohol use -> rating; liver function evidence required."
+
+
 def smoking_decision(status: str) -> Result:
     """Article 14 - smoking status. Loadings are monotonic in usage; a regular smoker
     is never rated more favourably than an occasional one."""

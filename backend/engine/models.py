@@ -35,6 +35,12 @@ class Smoking(str, Enum):
     regular = "regular"
 
 
+class Alcohol(str, Enum):
+    none = "none"
+    moderate = "moderate"
+    heavy = "heavy"
+
+
 class Sex(str, Enum):
     male = "male"
     female = "female"
@@ -65,9 +71,19 @@ class DecisionCode(str, Enum):
 # --------------------------------------------------------------------------- #
 class Financials(BaseModel):
     annual_income: float = Field(..., ge=0)
-    net_worth: Optional[float] = Field(default=None, ge=0)
+    net_worth: Optional[float] = Field(default=None)
+    assets: Optional[float] = Field(default=None, ge=0)
+    liabilities: Optional[float] = Field(default=None, ge=0)
     existing_life_cover: float = Field(default=0, ge=0)
     documents_provided: list[str] = Field(default_factory=list)
+
+    def effective_net_worth(self) -> float:
+        """Article 3.4 net worth: explicit value if given, else assets - liabilities."""
+        if self.net_worth is not None:
+            return self.net_worth
+        if self.assets is not None or self.liabilities is not None:
+            return (self.assets or 0) - (self.liabilities or 0)
+        return 0.0
 
 
 class MedicalDisclosure(BaseModel):
@@ -84,6 +100,7 @@ class HealthMetrics(BaseModel):
     height_cm: Optional[float] = Field(default=None, gt=0)
     weight_kg: Optional[float] = Field(default=None, gt=0)
     hba1c: Optional[float] = Field(default=None, ge=0, description="latest HbA1c %")
+    fasting_glucose: Optional[float] = Field(default=None, ge=0, description="fasting blood glucose mg/dL")
     systolic_bp: Optional[int] = Field(default=None, ge=0)
     diastolic_bp: Optional[int] = Field(default=None, ge=0)
 
@@ -101,6 +118,7 @@ class Individual(BaseModel):
     age: int = Field(..., ge=0, le=120)
     sex: Sex = Sex.other
     smoking: Smoking = Smoking.non_smoker
+    alcohol: Alcohol = Alcohol.none
     occupation: str = ""
     occupation_class: Optional[int] = Field(
         default=None, ge=1, le=6, description="Article 11 class 1-6; LLM infers if omitted"
