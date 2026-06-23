@@ -1,4 +1,4 @@
-# Aegis · L&H Underwriting Platform
+ Underwriting Platform
 
 An enterprise-style showcase app for Life & Health underwriting eligibility.
 
