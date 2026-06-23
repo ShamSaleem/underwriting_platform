@@ -87,11 +87,31 @@ def _run_individual(req: UnderwriteRequest) -> list[Finding]:
     out.append(_finding("Substance use (smoking)", "Article 14", tables.smoking_decision(ind.smoking.value)))
 
     if ind.occupation_class is not None:
-        res = tables.occupation_decision(ind.occupation_class)
-        # For life products occupational hazard is usually a flat extra, not mortality %.
-        out.append(_finding("Occupation", "Article 11", res))
+        out.append(_occupation_finding(ind.occupation_class))
 
     return out
+
+
+def _occupation_finding(occ_class: int) -> Finding:
+    """Article 11. Classes 1-4 standard; class 5 is high hazard -> a flat extra plus a
+    referral to confirm pricing; class 6 -> referral. For life cover occupational
+    hazard is priced as a flat extra per 1,000 SA, not a mortality %."""
+    res = tables.occupation_decision(occ_class)
+    if res[0] == DecisionCode.FE:  # class 5
+        return Finding(
+            factor="Occupation",
+            assessment=(
+                f"Occupation class {occ_class} (high hazard) -> flat extra "
+                f"{tables.OCCUPATION_FLAT_EXTRA_PER_MILLE:.1f} per 1,000 SA; refer to confirm."
+            ),
+            decision_code=DecisionCode.FE,
+            flat_extra_per_mille=tables.OCCUPATION_FLAT_EXTRA_PER_MILLE,
+            article="Article 11",
+            source="rules",
+            requires_referral=True,
+            referral_reason="High-hazard occupation (class 5) -> confirm flat extra.",
+        )
+    return _finding("Occupation", "Article 11", res)
 
 
 def _run_group(req: UnderwriteRequest) -> list[Finding]:

@@ -9,6 +9,10 @@ from ..models import DecisionCode
 
 Result = tuple[DecisionCode, int, str]
 
+# Article 11 - flat extra (per 1,000 sum assured) for a class-5 high-hazard occupation.
+# Occupational hazard on life cover is priced as a flat extra, not a mortality %.
+OCCUPATION_FLAT_EXTRA_PER_MILLE = 2.0
+
 
 def evidence_required(sum_assured: float) -> list[str]:
     """Article 4 - medical evidence by sum assured."""
@@ -44,9 +48,17 @@ def bmi_decision(bmi: float) -> Result:
 
 
 def hba1c_decision(hba1c: float) -> Result:
-    """Article 7 - diabetes control (HbA1c only; complications handled by LLM)."""
+    """Article 7 - diabetes control (HbA1c only; complications handled by LLM).
+
+    Non-diabetic ranges are not rated: <5.7% is normal, 5.7-6.4% is prediabetic.
+    Mortality loadings begin in the diabetic range (>=6.5%) and scale with control.
+    """
+    if hba1c < 5.7:
+        return DecisionCode.STD, 0, f"HbA1c {hba1c}% normal (non-diabetic)."
+    if hba1c < 6.5:
+        return DecisionCode.STD, 0, f"HbA1c {hba1c}% prediabetic range -> standard; monitor."
     if hba1c < 7:
-        return DecisionCode.R25, 25, f"HbA1c {hba1c}% well controlled."
+        return DecisionCode.R25, 25, f"HbA1c {hba1c}% diabetic, well controlled."
     if hba1c < 8:
         return DecisionCode.R50, 50, f"HbA1c {hba1c}% -> rating."
     if hba1c < 9:
@@ -66,12 +78,13 @@ def blood_pressure_decision(systolic: int, diastolic: int) -> Result:
 
 
 def smoking_decision(status: str) -> Result:
-    """Article 14 - smoking status."""
+    """Article 14 - smoking status. Loadings are monotonic in usage; a regular smoker
+    is never rated more favourably than an occasional one."""
     if status == "non_smoker":
         return DecisionCode.STD, 0, "Non-smoker."
     if status == "occasional":
-        return DecisionCode.R25, 25, "Occasional smoker -> rating."
-    return DecisionCode.STD, 0, "Regular smoker -> smoker premium rates apply."
+        return DecisionCode.R25, 25, "Occasional smoker -> +25% loading."
+    return DecisionCode.R50, 50, "Regular smoker -> +50% loading; smoker rates apply."
 
 
 def occupation_decision(occ_class: int) -> Result:

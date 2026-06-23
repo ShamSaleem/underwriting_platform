@@ -73,6 +73,10 @@ def combine(req: UnderwriteRequest, findings: list[Finding], evidence: list[str]
         overall = DecisionCode.FE
     elif exclusions:
         overall = DecisionCode.EXCL
+    elif referrals:
+        # No adverse rating, but something needs a human (income multiple, high-hazard
+        # occupation, small group, AI finding...). Surface REFER instead of auto-accepting.
+        overall = DecisionCode.REFER
     else:
         overall = _maybe_preferred(req)
 
@@ -137,6 +141,7 @@ def _build_explanation(
         DecisionCode.EXCL: "Accepted at Standard rates with exclusion(s).",
         DecisionCode.POST: "Postponed pending further evidence.",
         DecisionCode.DECL: "Declined.",
+        DecisionCode.REFER: "Referred to a human underwriter.",
     }.get(overall, f"Accepted at a {total_rating}% mortality rating ({overall.value}).")
 
     parts = [headline]

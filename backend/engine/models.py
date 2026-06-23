@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 # --------------------------------------------------------------------------- #
@@ -129,6 +129,16 @@ class UnderwriteRequest(BaseModel):
     individual: Optional[Individual] = None
     group: Optional[Group] = None
     financials: Optional[Financials] = None
+
+    @model_validator(mode="after")
+    def _block_matches_type(self) -> "UnderwriteRequest":
+        """Guard against a silent Standard accept when the matching applicant block is
+        missing (e.g. applicant_type='individual' with no individual data)."""
+        if self.applicant_type == ApplicantType.individual and self.individual is None:
+            raise ValueError("applicant_type 'individual' requires an 'individual' block")
+        if self.applicant_type == ApplicantType.group and self.group is None:
+            raise ValueError("applicant_type 'group' requires a 'group' block")
+        return self
 
 
 # --------------------------------------------------------------------------- #

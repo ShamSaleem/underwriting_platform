@@ -1,4 +1,4 @@
-// Thin API client. In dev, Vite proxies /api -> :8000; in prod the SPA is served
+// Thin API client. In dev, Vite proxies /api -> :8080; in prod the SPA is served
 // by the same FastAPI container, so relative URLs work everywhere.
 
 export type DecisionCode =
