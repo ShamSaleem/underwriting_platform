@@ -1,0 +1,11 @@
+# keep the build context small and clean
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+backend/static
+backend/underwriting.db
+*.db
+frontend/dist
+.git
+.DS_Store
