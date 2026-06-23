@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, CaseSummary, ChecklistGroup, Decision, DecisionCode, Stats, UploadResult } from "./api";
 
 /* ------------------------------------------------------------------ helpers */
@@ -19,6 +19,8 @@ const money = (n: number) =>
   "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 const lines = (s: string) =>
   s.split("\n").map((x) => x.trim()).filter(Boolean);
+// Capitalise the first letter of each word (after spaces, hyphens, slashes) for dropdown labels.
+const titleCase = (s: string) => s.replace(/(^|[\s/-])(\w)/g, (_, sep, ch) => sep + ch.toUpperCase());
 
 /* ------------------------------------------------------------- DecisionView */
 function DecisionView({ d }: { d: Decision }) {
@@ -187,6 +189,20 @@ const SAMPLES: Record<string, any> = {
       { condition: "Diabetes", details: "Type 2, diagnosed 4 years ago, on metformin, no complications", age_at_diagnosis: 43, treated: true },
     ],
   },
+  GroupClean: {
+    applicant_type: "group", product: "group_life", sum_assured: 100000,
+    annual_income: 250000, existing_life_cover: 0, assets: "", liabilities: "",
+    company_name: "Northwind Software", industry: "Information technology", num_employees: 120,
+    average_age: 34, occupation_classes: "1, 2", free_cover_limit_requested: 100000,
+    notes: "Office-based workforce, low occupational risk, stable headcount.",
+  },
+  GroupComplex: {
+    applicant_type: "group", product: "group_life", sum_assured: 500000,
+    annual_income: 1800000, existing_life_cover: 0, assets: "", liabilities: "",
+    company_name: "Atlas Mining & Construction", industry: "Mining and construction", num_employees: 45,
+    average_age: 49, occupation_classes: "4, 5, 6", free_cover_limit_requested: 500000,
+    notes: "High-hazard occupations, small scheme, older workforce and a free-cover limit well above the no-evidence threshold.",
+  },
 };
 
 type Step = { id: string; title: string; sub: string };
@@ -225,8 +241,10 @@ function bmiOf(h: any, w: any): number | null {
   return Math.round((W / (m * m)) * 10) / 10;
 }
 
-function Wizard({ onSaved }: { onSaved: () => void }) {
+function Wizard({ onSaved, go }: { onSaved: () => void; go: (id: string) => void }) {
   const [f, setF] = useState<any>(SAMPLES.Diabetic);
+  const [picked, setPicked] = useState(false);
+  const [bulk, setBulk] = useState(false);
   const [step, setStep] = useState(0);
   const [checks, setChecks] = useState<Set<string>>(new Set());
   const [reqGroups, setReqGroups] = useState<ChecklistGroup[]>([]);
@@ -243,6 +261,12 @@ function Wizard({ onSaved }: { onSaved: () => void }) {
   function switchType(t: string) {
     setF((p: any) => ({ ...p, applicant_type: t, product: t === "group" ? "group_life" : "individual_life" }));
     setStep(0); setChecks(new Set()); setReqGroups([]); setResult(null); setErr(null);
+  }
+
+  // Pick the applicant type from the entry cards, then drop into that type's wizard.
+  function choose(t: string) {
+    switchType(t);
+    setPicked(true);
   }
 
   // Pull the manual-driven documentation checklist when the documents step opens.
@@ -340,7 +364,7 @@ function Wizard({ onSaved }: { onSaved: () => void }) {
   }
 
   function restart() {
-    setResult(null); setStep(0); setChecks(new Set()); setReqGroups([]); setErr(null);
+    setResult(null); setPicked(false); setStep(0); setChecks(new Set()); setReqGroups([]); setErr(null);
   }
 
   // ----- disclosure list helpers -----
@@ -365,45 +389,117 @@ function Wizard({ onSaved }: { onSaved: () => void }) {
     );
   }
 
+  /* ---- bulk assessment opened from the entry card ---- */
+  if (bulk) {
+    return (
+      <div>
+        <button className="btn ghost" onClick={() => setBulk(false)} style={{ marginBottom: 16 }}>← Back to assessment types</button>
+        <Batch go={go} onDone={onSaved} />
+      </div>
+    );
+  }
+
+  /* ---- entry cards: choose the applicant type before the form opens ---- */
+  if (!picked) {
+    return (
+      <div className="type-pick">
+        <div className="type-card">
+          <div className="tc-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="8" r="3.6" />
+              <path d="M5 20c0-3.7 3.1-6.2 7-6.2s7 2.5 7 6.2" />
+            </svg>
+          </div>
+          <h3>Individual</h3>
+          <p className="muted">Assess a single life against the manual — financials, build &amp; vitals, lifestyle, and medical history.</p>
+          <ul className="tc-meta">
+            <li>7-step guided wizard</li>
+            <li>Build, vitals &amp; disclosures</li>
+            <li>Articles 1–19</li>
+          </ul>
+          <button className="btn primary" onClick={() => choose("individual")}>Start individual assessment →</button>
+        </div>
+        <div className="type-card">
+          <div className="tc-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="5.5" y="3.5" width="13" height="17" rx="1.5" />
+              <path d="M9 7.5h2M13 7.5h2M9 11h2M13 11h2M9 14.5h2M13 14.5h2" />
+              <path d="M10.5 20.5v-3h3v3" />
+            </svg>
+          </div>
+          <h3>Group / Company</h3>
+          <p className="muted">Assess an employer scheme — workforce profile, occupation classes, and free-cover limits.</p>
+          <ul className="tc-meta">
+            <li>4-step guided wizard</li>
+            <li>Scheme &amp; occupational risk</li>
+            <li>Articles 1·3·11·16·17</li>
+          </ul>
+          <button className="btn primary" onClick={() => choose("group")}>Start company assessment →</button>
+        </div>
+        <div className="type-card">
+          <div className="tc-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 14.5V4" />
+              <path d="M8 8l4-4 4 4" />
+              <path d="M5 14.5v4a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5v-4" />
+            </svg>
+          </div>
+          <h3>Bulk from Excel</h3>
+          <p className="muted">Assess many applicants at once — upload an .xlsx with one applicant per row, single person or hundreds.</p>
+          <ul className="tc-meta">
+            <li>Individuals &amp; groups in one sheet</li>
+            <li>Worked-example template</li>
+            <li>Per-row decisions &amp; errors</li>
+          </ul>
+          <button className="btn primary" onClick={() => setBulk(true)}>Start bulk assessment →</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="card wizard">
-      {/* applicant-type toggle + samples live above the stepper */}
-      <div className="toolbar" style={{ marginBottom: 20 }}>
-        <div className="seg">
-          <button className={!isGroup ? "on" : ""} onClick={() => switchType("individual")}>Individual</button>
-          <button className={isGroup ? "on" : ""} onClick={() => switchType("group")}>Group / Company</button>
+    <div className="assess-layout">
+      <div className="card wizard">
+        {/* chosen type lives above the stepper; sample shortcuts moved to the aside */}
+        <div className="toolbar" style={{ marginBottom: 20 }}>
+          <button className="btn ghost" onClick={() => setPicked(false)}>← Change type</button>
+          <span className="type-tag">{isGroup ? "Group / Company" : "Individual"}</span>
         </div>
-        <div className="spacer" style={{ flex: 1 }} />
-        {!isGroup && current.id === "applicant" && (
-          <>
-            <button className="btn ghost" onClick={() => { setF(SAMPLES.Clean); setChecks(new Set()); }}>Sample: clean</button>
-            <button className="btn ghost" onClick={() => { setF(SAMPLES.Diabetic); setChecks(new Set()); }}>Sample: complex</button>
-          </>
-        )}
-      </div>
 
-      <Stepper steps={steps} step={step} onJump={(i) => i < step && setStep(i)} />
+        <Stepper steps={steps} step={step} onJump={(i) => i < step && setStep(i)} />
 
-      <div className="step-head">
-        <h3>{current.title}</h3>
-        <div className="muted">{stepBlurb(current.id)}</div>
-      </div>
+        <div className="step-head">
+          <h3>{current.title}</h3>
+          <div className="muted">{stepBlurb(current.id)}</div>
+        </div>
 
-      <div className="wizard-body">{renderStep()}</div>
+        <div className="wizard-body">{renderStep()}</div>
 
-      <div className="wizard-foot">
-        <button className="btn ghost" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0}>← Back</button>
-        <div className="toolbar">
-          {err && <span style={{ color: "var(--red)", fontSize: 13 }}>{err}</span>}
-          {current.id === "review" ? (
-            <button className="btn primary" onClick={submit} disabled={busy}>
-              {busy ? <span className="spinner" /> : "Assess eligibility →"}
-            </button>
-          ) : (
-            <button className="btn primary" onClick={() => setStep((s) => s + 1)} disabled={!canAdvance()}>Next →</button>
-          )}
+        <div className="wizard-foot">
+          <button className="btn ghost" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0}>← Back</button>
+          <div className="toolbar">
+            {err && <span style={{ color: "var(--red)", fontSize: 13 }}>{err}</span>}
+            {current.id === "review" ? (
+              <button className="btn primary" onClick={submit} disabled={busy}>
+                {busy ? <span className="spinner" /> : "Assess eligibility →"}
+              </button>
+            ) : (
+              <button className="btn primary" onClick={() => setStep((s) => s + 1)} disabled={!canAdvance()}>Next →</button>
+            )}
+          </div>
         </div>
       </div>
+
+      <AssessAside
+        f={f}
+        isGroup={isGroup}
+        current={current}
+        step={step}
+        steps={steps}
+        showSamples={current.id === "applicant"}
+        onSampleClean={() => { setF(isGroup ? SAMPLES.GroupClean : SAMPLES.Clean); setChecks(new Set()); }}
+        onSampleComplex={() => { setF(isGroup ? SAMPLES.GroupComplex : SAMPLES.Diabetic); setChecks(new Set()); }}
+      />
     </div>
   );
 
@@ -415,7 +511,7 @@ function Wizard({ onSaved }: { onSaved: () => void }) {
           <div className="form-grid">
             <Field label="Product">
               <select value={f.product} onChange={(e) => set("product", e.target.value)}>
-                {["group_life", "medical", "credit_life"].map((p) => <option key={p} value={p}>{p.replace(/_/g, " ")}</option>)}
+                {["group_life", "medical", "credit_life"].map((p) => <option key={p} value={p}>{titleCase(p.replace(/_/g, " "))}</option>)}
               </select>
             </Field>
             <Field label="Sum assured / scheme benefit (USD)"><input type="number" value={f.sum_assured} onChange={(e) => set("sum_assured", e.target.value)} /></Field>
@@ -427,7 +523,7 @@ function Wizard({ onSaved }: { onSaved: () => void }) {
           <div className="form-grid">
             <Field label="Product">
               <select value={f.product} onChange={(e) => set("product", e.target.value)}>
-                {["individual_life", "critical_illness", "disability_income", "medical", "credit_life"].map((p) => <option key={p} value={p}>{p.replace(/_/g, " ")}</option>)}
+                {["individual_life", "critical_illness", "disability_income", "medical", "credit_life"].map((p) => <option key={p} value={p}>{titleCase(p.replace(/_/g, " "))}</option>)}
               </select>
             </Field>
             <Field label="Sum assured (USD)"><input type="number" value={f.sum_assured} onChange={(e) => set("sum_assured", e.target.value)} /></Field>
@@ -435,7 +531,7 @@ function Wizard({ onSaved }: { onSaved: () => void }) {
             <Field label="Age"><input type="number" value={f.age} onChange={(e) => set("age", e.target.value)} /></Field>
             <Field label="Sex">
               <select value={f.sex} onChange={(e) => set("sex", e.target.value)}>
-                <option value="male">male</option><option value="female">female</option><option value="other">other</option>
+                <option value="male">Male</option><option value="female">Female</option><option value="other">Other</option>
               </select>
             </Field>
           </div>
@@ -507,19 +603,19 @@ function Wizard({ onSaved }: { onSaved: () => void }) {
           <div className="form-grid">
             <Field label="Smoking — Article 14">
               <select value={f.smoking} onChange={(e) => set("smoking", e.target.value)}>
-                <option value="non_smoker">non-smoker</option><option value="occasional">occasional</option><option value="regular">regular</option>
+                <option value="non_smoker">Non-Smoker</option><option value="occasional">Occasional</option><option value="regular">Regular</option>
               </select>
             </Field>
             <Field label="Alcohol — Article 14">
               <select value={f.alcohol} onChange={(e) => set("alcohol", e.target.value)}>
-                <option value="none">none / minimal</option><option value="moderate">moderate</option><option value="heavy">heavy</option>
+                <option value="none">None / Minimal</option><option value="moderate">Moderate</option><option value="heavy">Heavy</option>
               </select>
             </Field>
             <Field label="Occupation"><input value={f.occupation} onChange={(e) => set("occupation", e.target.value)} /></Field>
             <Field label="Occupation class — Article 11">
               <select value={f.occupation_class ?? ""} onChange={(e) => set("occupation_class", e.target.value === "" ? "" : Number(e.target.value))}>
-                <option value="">— select class —</option>
-                {OCCUPATION_CLASSES.map(([n, label]) => <option key={n} value={n}>{n} — {label}</option>)}
+                <option value="">— Select Class —</option>
+                {OCCUPATION_CLASSES.map(([n, label]) => <option key={n} value={n}>{n} — {titleCase(label)}</option>)}
               </select>
             </Field>
             <Field label="Avocations, one per line — Article 12" full><textarea value={f.avocations} onChange={(e) => set("avocations", e.target.value)} /></Field>
@@ -540,7 +636,7 @@ function Wizard({ onSaved }: { onSaved: () => void }) {
                   <Field label="Age at dx"><input type="number" value={d.age_at_diagnosis} onChange={(e) => updDisc(i, "age_at_diagnosis", e.target.value)} /></Field>
                   <Field label="Treated">
                     <select value={d.treated == null ? "" : d.treated ? "yes" : "no"} onChange={(e) => updDisc(i, "treated", e.target.value === "" ? null : e.target.value === "yes")}>
-                      <option value="">—</option><option value="yes">yes</option><option value="no">no</option>
+                      <option value="">—</option><option value="yes">Yes</option><option value="no">No</option>
                     </select>
                   </Field>
                   <button className="btn ghost" onClick={() => rmDisc(i)} title="Remove">✕</button>
@@ -585,6 +681,54 @@ function stepBlurb(id: string): string {
     group: "Scheme risk profile.",
     review: "Confirm the inputs, then run the engine.",
   }[id] || "";
+}
+
+// Longer, manual-grounded context for the side rail — complements (doesn't repeat) the inline blurb.
+function stepGuide(id: string): string {
+  return {
+    applicant: "Identity, product and the requested sum assured anchor every downstream check. The sum assured drives the financial-justification and evidence thresholds.",
+    documents: "The required checklist is generated from the sum assured and income. All mandatory items must be on file before the case can advance.",
+    financial: "Cover is capped at a 15×–25× income multiple by band; net worth can justify more. Anything above the combined limit is referred.",
+    build: "BMI, blood pressure and HbA1c / fasting glucose are matched against the Article 5–7 tables to derive a build and metabolic rating.",
+    lifestyle: "Smoking, occupation class, avocations and travel each carry their own loadings under Articles 11–14.",
+    history: "Family history and any disclosed conditions are rated against Articles 6–10 and 15, and may trigger additional evidence.",
+    group: "Workforce size, average age, occupation classes and the free-cover limit determine the scheme rating and referral threshold.",
+    review: "Confirm every input below is correct. The engine combines all factors into one decision with cited articles.",
+  }[id] || "";
+}
+
+function AssessAside({ f, isGroup, current, step, steps, showSamples, onSampleClean, onSampleComplex }: { f: any; isGroup: boolean; current: Step; step: number; steps: Step[]; showSamples: boolean; onSampleClean: () => void; onSampleComplex: () => void }) {
+  const name = isGroup ? (f.company_name || "—") : (f.full_name || "—");
+  return (
+    <aside className="assess-aside">
+      <div className="card aside-card">
+        <div className="aside-title">Case summary</div>
+        <dl className="aside-list">
+          <div><dt>Type</dt><dd>{isGroup ? "Group / Company" : "Individual"}</dd></div>
+          <div><dt>{isGroup ? "Company" : "Applicant"}</dt><dd>{name}</dd></div>
+          <div><dt>Product</dt><dd>{String(f.product).replace(/_/g, " ")}</dd></div>
+          <div><dt>Sum assured</dt><dd>{Number(f.sum_assured) > 0 ? money(f.sum_assured) : "—"}</dd></div>
+          {isGroup
+            ? <div><dt>Employees</dt><dd>{f.num_employees || "—"}</dd></div>
+            : <div><dt>Age / sex</dt><dd>{f.age ? `${f.age} · ${f.sex}` : "—"}</dd></div>}
+        </dl>
+      </div>
+      <div className="card aside-card">
+        <div className="aside-title">Step {step + 1} of {steps.length} · {current.sub}</div>
+        <div className="aside-step">{current.title}</div>
+        <p className="aside-help">{stepGuide(current.id)}</p>
+      </div>
+      {showSamples && (
+        <div className="card aside-card aside-samples">
+          <div className="aside-title">Load sample</div>
+          <div className="aside-sample-btns">
+            <button className="btn ghost" onClick={onSampleClean}>Sample: clean</button>
+            <button className="btn ghost" onClick={onSampleComplex}>Sample: complex</button>
+          </div>
+        </div>
+      )}
+    </aside>
+  );
 }
 
 function Stepper({ steps, step, onJump }: { steps: Step[]; step: number; onJump: (i: number) => void }) {
@@ -805,16 +949,30 @@ function Login({ onLogin }: { onLogin: (user: string) => void }) {
 }
 
 /* ---------------------------------------------------------------- App */
-type View = { name: "dashboard" | "assess" | "batch" | "cases" } | { name: "case"; id: string };
+type View = { name: "dashboard" | "assess" | "cases" } | { name: "case"; id: string };
+
+// Toggle the `dark` class on <html> and persist. Mirrors etimad's colour-mode store.
+function useColorMode(): [boolean, () => void] {
+  const [dark, setDark] = useState<boolean>(() => localStorage.getItem("uw_theme") === "dark");
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark);
+    localStorage.setItem("uw_theme", dark ? "dark" : "light");
+  }, [dark]);
+  return [dark, () => setDark((d) => !d)];
+}
 
 export default function App() {
   const [user, setUser] = useState<string | null>(() => localStorage.getItem("aegis_user"));
   const [view, setView] = useState<View>({ name: "dashboard" });
   const [tick, setTick] = useState(0); // refresh dashboard after a save
+  const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem("uw_sidebar") === "collapsed");
+  const [dark, toggleDark] = useColorMode();
 
-  const nav = (n: "dashboard" | "assess" | "batch" | "cases") => setView({ name: n });
+  const nav = (n: "dashboard" | "assess" | "cases") => setView({ name: n });
   const openCase = (id: string) => setView({ name: "case", id });
   const logout = () => { localStorage.removeItem("aegis_user"); setUser(null); };
+  const toggleSidebar = () =>
+    setCollapsed((c) => { localStorage.setItem("uw_sidebar", c ? "expanded" : "collapsed"); return !c; });
 
   if (!user) {
     return (
@@ -827,7 +985,6 @@ export default function App() {
   const titles: Record<string, [string, string]> = {
     dashboard: ["Portfolio Overview", ""],
     assess: ["New Assessment", ""],
-    batch: ["Bulk Assessment", "Upload an Excel of applicants — single or many"],
     cases: ["Case History", "All assessed applications"],
     case: ["Case Detail", "Full decision and cited findings"],
   };
@@ -836,36 +993,54 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="logo">UW</div>
-          <div>
-            <div className="name">Underwriting</div>
-            <div className="tag">Engine · L&amp;H</div>
-          </div>
+      <aside className={"sidebar" + (collapsed ? " collapsed" : "")}>
+        <div className="side-head">
+          {/* Collapsed → the logo doubles as the expand button (fades to reveal a ›). */}
+          <button
+            className="brand-btn"
+            onClick={collapsed ? toggleSidebar : undefined}
+            aria-label={collapsed ? "Expand sidebar" : "Underwriting Engine"}
+          >
+            <span className="logo">UW</span>
+            {collapsed && <span className="brand-expand"><ChevronRight /></span>}
+            <span className="brand-meta">
+              <span className="name">Underwriting</span>
+              <span className="tag">Engine · L&amp;H</span>
+            </span>
+          </button>
+          <button className="collapse-btn" onClick={toggleSidebar} aria-label="Collapse sidebar">
+            <ChevronLeft />
+          </button>
         </div>
-        <NavItem ic="▦" label="Dashboard" active={view.name === "dashboard"} onClick={() => nav("dashboard")} />
-        <NavItem ic="✚" label="New Assessment" active={view.name === "assess"} onClick={() => nav("assess")} />
-        <NavItem ic="⤒" label="Bulk Assessment" active={view.name === "batch"} onClick={() => nav("batch")} />
-        <NavItem ic="≣" label="Case History" active={view.name === "cases" || view.name === "case"} onClick={() => nav("cases")} />
+
+        <nav className="side-nav" aria-label="Primary">
+          <NavItem icon={<IconDashboard />} label="Dashboard" active={view.name === "dashboard"} onClick={() => nav("dashboard")} />
+          <NavItem icon={<IconAssess />} label="New Assessment" active={view.name === "assess"} onClick={() => nav("assess")} />
+          <NavItem icon={<IconCases />} label="Case History" active={view.name === "cases" || view.name === "case"} onClick={() => nav("cases")} />
+        </nav>
+
         <div className="spacer" />
+
+        <div className="side-foot">
+          <button className="nav-item theme-toggle" onClick={toggleDark} aria-label={dark ? "Light mode" : "Dark mode"}>
+            <span className="ic"><ThemeIcon dark={dark} /></span>
+            <span className="nav-label">{dark ? "Light mode" : "Dark mode"}</span>
+            <span className="nav-tip">{dark ? "Light mode" : "Dark mode"}</span>
+          </button>
+          <UserMenu user={user} initials={initials} onLogout={logout} />
+        </div>
       </aside>
 
-      <main className="main">
+      <main className="main glass-nav">
         <div className="topbar">
           <div>
             <h1>{title}</h1>
             {sub && <div className="sub">{sub}</div>}
           </div>
-          <div className="right">
-            <button className="btn ghost" onClick={logout}>Logout</button>
-            <div className="avatar">{initials}</div>
-          </div>
         </div>
         <div className="content">
           {view.name === "dashboard" && <Dashboard key={tick} go={openCase} />}
-          {view.name === "assess" && <Wizard onSaved={() => setTick((t) => t + 1)} />}
-          {view.name === "batch" && <Batch go={openCase} onDone={() => setTick((t) => t + 1)} />}
+          {view.name === "assess" && <Wizard go={openCase} onSaved={() => setTick((t) => t + 1)} />}
           {view.name === "cases" && <Cases key={tick} go={openCase} />}
           {view.name === "case" && <CaseDetail id={view.id} back={() => nav("cases")} />}
         </div>
@@ -874,10 +1049,125 @@ export default function App() {
   );
 }
 
-function NavItem({ ic, label, active, onClick }: { ic: string; label: string; active: boolean; onClick: () => void }) {
+function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
   return (
-    <button className={"nav-item" + (active ? " active" : "")} onClick={onClick}>
-      <span className="ic">{ic}</span> {label}
+    <button className={"nav-item" + (active ? " active" : "")} onClick={onClick} aria-label={label}>
+      <span className="ic">{icon}</span>
+      <span className="nav-label">{label}</span>
+      <span className="nav-tip">{label}</span>
     </button>
+  );
+}
+
+/* Avatar + popover menu pinned to the sidebar foot — mirrors etimad's UserMenuTrigger. */
+function UserMenu({ user, initials, onLogout }: { user: string; initials: string; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  return (
+    <div className="user-wrap" ref={wrapRef}>
+      <button className="user-btn" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open}>
+        <span className="user-avatar">{initials}</span>
+        <span className="user-meta">
+          <span className="u-name">{user}</span>
+          <span className="u-role">Underwriter</span>
+        </span>
+        <span className="nav-tip">{user}</span>
+      </button>
+      {open && (
+        <div className="user-menu" role="menu">
+          <div className="um-head">
+            <div className="um-name">{user}</div>
+            <div className="um-sub">Signed in · Underwriter</div>
+          </div>
+          <button className="um-item danger" onClick={onLogout} role="menuitem">
+            <IconLogout /> Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---- Inline icons (uniform 20×20, stroke 2.1) so the rail aligns cleanly ---- */
+function IconDashboard() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" />
+      <rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" />
+    </svg>
+  );
+}
+function IconAssess() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" />
+      <line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" />
+    </svg>
+  );
+}
+function IconCases() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+      <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+    </svg>
+  );
+}
+function IconLogout() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  );
+}
+function ChevronLeft() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  );
+}
+function ChevronRight() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  );
+}
+
+// Animated sun↔moon morph (rays fade/shrink; a mask carves the crescent), ported
+// from etimad's ThemeToggle but driven by CSS transitions instead of framer-motion.
+function ThemeIcon({ dark }: { dark: boolean }) {
+  return (
+    <svg
+      width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.2" strokeLinecap="round"
+      style={{ transform: `rotate(${dark ? 270 : 0}deg)`, transition: "transform 400ms cubic-bezier(0.4,0,0.2,1)", overflow: "visible" }}
+    >
+      <mask id="theme-moon-mask">
+        <rect x="0" y="0" width="100%" height="100%" fill="white" />
+        <circle cx={dark ? 17 : 33} cy={dark ? 8 : 0} r="9" fill="black" style={{ transition: "cx 400ms cubic-bezier(0.4,0,0.2,1), cy 400ms cubic-bezier(0.4,0,0.2,1)" }} />
+      </mask>
+      <circle cx="12" cy="12" r={dark ? 9 : 5} fill="currentColor" stroke="none" mask="url(#theme-moon-mask)" style={{ transition: "r 400ms cubic-bezier(0.4,0,0.2,1)" }} />
+      <g style={{ opacity: dark ? 0 : 1, transform: dark ? "scale(0) rotate(-30deg)" : "scale(1)", transformOrigin: "12px 12px", transition: "opacity 400ms, transform 400ms cubic-bezier(0.4,0,0.2,1)" }}>
+        <line x1="12" y1="1" x2="12" y2="3" />
+        <line x1="12" y1="21" x2="12" y2="23" />
+        <line x1="1" y1="12" x2="3" y2="12" />
+        <line x1="21" y1="12" x2="23" y2="12" />
+        <line x1="5.64" y1="5.64" x2="4.22" y2="4.22" />
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+        <line x1="5.64" y1="18.36" x2="4.22" y2="19.78" />
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+      </g>
+    </svg>
   );
 }
